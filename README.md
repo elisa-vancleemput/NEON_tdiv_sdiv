@@ -9,7 +9,7 @@ Contains code to download herbaceous NPP from the Rangelands Analysis Platform i
 The code is also directly accessible here:
 https://code.earthengine.google.com/?accept_repo=users/elisavancleemput/NEON_tdiv_sdiv
 
-**OO_Main_script_downloads.R**
+**00_Main_script_downloads.R**
 Contains code to download, preprocess and combine imagery and vegetation plot information from NEON.
 The code is supported by functions that are stored in 
  - 01_Download_preprocess_aop_imagery.R
@@ -20,5 +20,7 @@ The code is supported by functions that are stored in
 **00_Main_script_analyses.R**
 Contains code to run analyses on the extracted data
 The code is supported by functions that are stored in 
- - 01_Download_preprocess_aop_imagery.R: only for the functions "list_tiles_covering_poly_tibble" and "list_tiles_covering_poly"
+ - 01_Download_preprocess_aop_imagery.R
  - 05_Analyses_functions.R
+
+The shapefiles in the folder NEON_boundaries are used as contours during data downloads.
