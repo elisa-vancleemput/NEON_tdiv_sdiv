@@ -1,0 +1,286 @@
+//--------------------------------------------------------------//
+//                                                              //
+//   Extract herbaceous NPP from Rangeland Analysis Platform    //
+//                                                              //                                                              //
+//--------------------------------------------------------------//
+
+/* 
+  Code accompanying
+  Van Cleemput, E., Adler, P., Suding, K. in Global Ecology and Geography
+  Making remote sense of biodiversity: What grassland characteristics make spectral diversity a good proxy for taxonomic diversity?
+  
+  
+  In this script we extract raster products from the Rangeland Analysis Platform (https://rangelands.app/products/)
+  
+  - conventional Plant Functional Type (cPFT) cover %:
+    Allred, B.W., B.T. Bestelmeyer, C.S. Boyd, C. Brown, K.W. Davies, 
+    M.C. Duniway, L.M. Ellsworth, T.A. Erickson, S.D. Fuhlendorf, 
+    T.V. Griffiths, V. Jansen, M.O. Jones, J. Karl, A. Knight, 
+    J.D. Maestas, J.J. Maynard, S.E. McCord, D.E. Naugle, H.D. Starns,
+    D. Twidwell, and D.R. Uden. 2021. Improving Landsat predictions of
+    rangeland fractional cover with multitask learning and uncertainty.
+    Methods in Ecology and Evolution. 
+    http://dx.doi.org/10.1111/2041-210x.13564
+
+  
+  - NPP per plant functional type:
+    Robinson, N.P., M.O. Jones, A. Moreno, T.A. Erickson, D.E. Naugle, 
+    and B.W. Allred. 2019. Rangeland productivity partitioned to sub-pixel 
+    plant functional types. Remote Sensing 11:1427. 
+    https://dx.doi.org/10.3390/rs11121427   
+   
+  This script is written to be general and not site specific.
+  It should therefore be run separately for each focal site.
+*/
+
+//--------------------------------------------//
+// General settings //
+//--------------------------------------------//
+// Specify for which site to run the script
+var sitename = 'ABBY';
+
+
+var GD_folder = 'GEE_results'; // folder on Google drive specifying where to store results
+var plotyear = '2017'; // year for which to export year NPP images
+// --> Export images of the year 2017 for which we also analyse airbore hyperspectral imagery
+
+//--------------------------------------------//
+// Load shapefile datasets //
+//--------------------------------------------//
+// Loading shapefiles of the flight boundaries, provided by NEON
+var fc_FlightBoxes = ee.FeatureCollection('users/elisavancleemput/AOP_Flightboxes_2020');
+print('Flight boxes',fc_FlightBoxes);
+var filter = ee.Filter.inList('siteID', 
+  ['ABBY', 'CLBJ', 'CPER', 'KONZ', 'NIWO', 'NOGP', 'OAES', 'SJER', 'WOOD']);
+var fc_flights_filtered = fc_FlightBoxes.filter(filter);
+Map.addLayer(fc_flights_filtered, {}, 'Flight boundaries');
+
+// Loading shapefiles of the field sampling boundaries, provided by NEON
+var fc_FieldSamplingBound = ee.FeatureCollection('users/elisavancleemput/Field_Sampling_Boundaries_2020');
+print('Field sampling boundaries',fc_FieldSamplingBound);
+var fc_FieldSampling_filtered = fc_FieldSamplingBound.filter(filter);
+Map.addLayer(fc_FieldSampling_filtered, {color: '006600'}, 'Field sampling boundaries');
+
+// Filter site of interest
+var fc_site = fc_FieldSampling_filtered.filter(ee.Filter.eq('siteID', sitename));
+print('Field sampling boundary ' + sitename, fc_site);
+Map.addLayer(fc_site, {color: '006600'}, sitename + 'polygons');
+Map.centerObject(fc_site);
+
+//--------------------------------------------//
+// Load raster datasets //
+//--------------------------------------------//
+
+// Load land cover imagery time series
+var cover_collection_withSTD = ee.ImageCollection('projects/rangeland-analysis-platform/vegetation-cover-v2');
+print('Vegetation cover full',cover_collection_withSTD);
+// Collection with absolute cover values only (no STD's)
+var cover_collection = cover_collection_withSTD
+  .select(['AFGC', 'PFGC', 'SHR', 'TREE', 'LTR', 'BG']);
+// print('cPFT cover %',cover_collection);
+var sumHerbaceousCover = function(image) {
+    var image_herbaceous = image.select(['AFGC', 'PFGC']);
+    var herbaceous = ee.Image(image_herbaceous).reduce(ee.Reducer.sum()).rename(['herbaceous']);
+    var output = ee.Image(image).addBands(herbaceous);
+    return output;
+};
+var cover_collection = cover_collection.map(sumHerbaceousCover);
+print('cPFT cover %',cover_collection);
+
+// Load NPP imagery time series (Robinson et al. 2019)
+var npp_collection = ee.ImageCollection("projects/rangeland-analysis-platform/npp-partitioned-v2");
+var sumHerbaceousNPP = function(image) {
+    var image_herbaceous = image.select(['afgNPP', 'pfgNPP']);
+    var herbaceousNPP = ee.Image(image_herbaceous).reduce(ee.Reducer.sum()).rename(['herbaceousNPP']);
+    var output = ee.Image(image).addBands(herbaceousNPP);
+    return output;
+};
+var npp_collection = npp_collection.map(sumHerbaceousNPP);
+print('NPP per cPFT',npp_collection);
+
+/* 
+IMPORTANT NOTE
+
+From  https://code.earthengine.google.com/312894322045efc8d0b9bb89af166816
+(a script distribbuted by RAP to convert NPP into biomass)
+it appears that NPP values are not reported in g m-2 year-1, but in g m-2 year-1 * 10
+The reason is that the function in the linked script applies a 0.0001 NPP scalar to convert raw NPP to kg, 
+but this should only be 0.001 if the data were reported in g m-2 year-1!
+
+*/
+
+//--------------------------------------------//
+// Clip and subset imagecollection 
+// for plotting and saving
+//--------------------------------------------//
+
+// Clip to the area of interest
+var cover_collection_site = cover_collection.map(function (image) {return image.clip(fc_site);});
+var cover_collection_FieldSampling = cover_collection.map(function (image) {return image.clip(fc_FieldSampling_filtered);});
+var cover_collection_flights = cover_collection.map(function (image) {return image.clip(fc_flights_filtered);});
+
+var npp_collection_site = npp_collection.map(function (image) {return image.clip(fc_site);});
+var npp_collection_FieldSampling = npp_collection.map(function (image) {return image.clip(fc_FieldSampling_filtered);});
+var npp_collection_flights = npp_collection.map(function (image) {return image.clip(fc_flights_filtered);});
+
+// functions which convert imagecollection to one image
+var mergeBands_cover = function(image, previous) {
+  return ee.Image(previous).addBands(image, ['AFGC', 'PFGC', 'SHR', 'TREE', 'LTR', 'BG', 'herbaceous']);
+};
+var mergeBands_NPP = function(image, previous) {
+  return ee.Image(previous).addBands(image, ['afgNPP', 'pfgNPP', 'shrNPP', 'treeNPP', 'QC', 'herbaceousNPP']);
+};
+
+// Extract year of interest and convert imagecollections to one image
+var cover_collection_site_plotyear = ee.Image(cover_collection_site.filter(ee.Filter.eq('system:index', plotyear)).iterate(mergeBands_cover, ee.Image([])));
+var cover_collection_FieldSampling_plotyear = ee.Image(cover_collection_FieldSampling.filter(ee.Filter.eq('system:index', plotyear)).iterate(mergeBands_cover, ee.Image([])));
+var cover_collection_flights_plotyear = ee.Image(cover_collection_flights.filter(ee.Filter.eq('system:index', plotyear)).iterate(mergeBands_cover, ee.Image([])));
+print('Cover % per cPFT for site and year', npp_collection_site_plotyear);
+
+var npp_collection_site_plotyear = ee.Image(npp_collection_site.filter(ee.Filter.eq('system:index', plotyear)).iterate(mergeBands_NPP, ee.Image([])));
+var npp_collection_FieldSampling_plotyear = ee.Image(npp_collection_FieldSampling.filter(ee.Filter.eq('system:index', plotyear)).iterate(mergeBands_NPP, ee.Image([])));
+var npp_collection_flights_plotyear = ee.Image(npp_collection_flights.filter(ee.Filter.eq('system:index', plotyear)).iterate(mergeBands_NPP, ee.Image([])));
+print('NPP per cPFT for site and year', npp_collection_site_plotyear);
+//--------------------------------------------//
+// Export images //
+//--------------------------------------------//
+
+// RAP data has the same resolution as Landsat, so
+// for native resolution use scale: 30
+
+Export.image.toDrive({
+  image: cover_collection_site_plotyear.double(),
+  description: sitename + '_cover_' + plotyear,
+  folder: GD_folder,
+  region: fc_site,
+  scale: 30
+});
+
+Export.image.toDrive({
+  image: npp_collection_site_plotyear.double(),
+  description: sitename + '_npp_' + plotyear,
+  folder: GD_folder,
+  region: fc_site,
+  scale: 30
+});
+
+//--------------------------------------------//
+// Visualize spatial results //
+//--------------------------------------------//
+// Visualize the results
+// Check following links for coding autom stretching: 
+//  - https://gis.stackexchange.com/questions/259072/google-earth-engine-different-stretch-options
+//  - https://gis.stackexchange.com/questions/308372/inserting-min-and-max-values-from-var-in-visual-parameters-of-image-using-google
+
+// function that extract min and max pixel values of the image of interest; 
+// and uses these to stretch the pixel values
+var get_vis_param = function(image, fc, bandname, pal){
+    var minMax = image.reduceRegion({
+    reducer: ee.Reducer.minMax(),
+    geometry: fc,
+    scale: 30,
+    maxPixels: 1e9
+  });
+  //print('Minmax',minMax);
+
+var vis_param =  ee.Dictionary({
+    bands:[bandname],
+    min: ee.Number(minMax.get(bandname + '_min')),
+    max: ee.Number(minMax.get(bandname + '_max')),
+   palette: pal
+  });
+  
+  return vis_param;
+};
+
+// color palette
+var palettes = require('users/gena/packages:palettes');
+print('palettes', palettes);
+var palette_bamako = palettes.crameri.bamako[10].reverse();
+/*var bamakoReverse = [ "00404D", "084449", "0F4845", "154C41", "1C513C",
+  "235538", "2B5A34", "325F2F", "3A652A", "436A25", "4C7020", "56771A",  
+  "617E14", "6C840E", "7A8B06", "878E03", "969206", "A89A14", "B9A525", 
+  "CBB33A", "D9BF4F", "E3C961", "EDD375", "F6DC86", "FFE599" ].reverse(); */
+
+
+////////  Visualize rangeland NPP of focal site and focal year
+// Use image min and max values of focal site as boundaries for image stretching
+Map.addLayer(npp_collection_site_plotyear.select('herbaceousNPP'), 
+            get_vis_param(npp_collection_site_plotyear, fc_site, 'herbaceousNPP', palette_bamako).getInfo(),
+            'Herbaceous NPP in ' + plotyear);
+
+////////  Visualize rangeland NPP of focal year and all NEON sites:
+// stretch color gradient across all sites
+Map.addLayer(npp_collection_FieldSampling_plotyear.select('herbaceousNPP'), 
+            get_vis_param(npp_collection_FieldSampling_plotyear, fc_FieldSampling_filtered, 'herbaceousNPP', palette_bamako).getInfo(),
+            'Herbaceous NPP within all NEON field sampling boundaries in ' + plotyear);
+Map.addLayer(npp_collection_flights_plotyear.select('herbaceousNPP'), 
+            get_vis_param(npp_collection_FieldSampling_plotyear, fc_flights_filtered, 'herbaceousNPP', palette_bamako).getInfo(),
+            'Herbaceous NPP within all NEON flight boundaries in ' + plotyear);
+
+  
+//--------------------------------------------//
+// Visualize temporal pattern = time series   //
+//--------------------------------------------//
+  // Average time series of the entire site
+
+// Attention!!! this average includes pixels that were masked out in other analyses 
+// because of low NDVI or tree cover
+
+var timeseries_cover_site = ui.Chart.image.series({
+  imageCollection: cover_collection,
+  //imageCollection: cover_collection.filter(ee.Filter.rangeContains('system:index', StartYear, EndYear)),
+  region: fc_site,
+  reducer: ee.Reducer.mean(),
+  scale: 200,
+  xProperty: 'system:time_start',
+});
+timeseries_cover_site
+  .setChartType('ScatterChart')
+  .setOptions({
+    title: 'cPFT cover over time in ' + sitename,
+    vAxis: {
+    title: 'cPFT cover (%)'
+    },
+    lineWidth: 1,
+    pointSize: 4,
+    series: {
+    // these are colors from the Set1 palette of colorBrewer
+      0: {color: 'e41a1c'}, // AFGC
+      1: {color: '377eb8'}, // BG
+      2: {color: '4daf4a'}, // LTR
+      3: {color: '984ea3'}, // PFGC
+      4: {color: 'ff7f00'}, // SHR
+      5: {color: 'ffff33'}, // TREE
+      6: {color: 'a65628'}, // herbaceous 
+    }
+  });
+print(timeseries_cover_site);
+
+var timeseries_npp_site = ui.Chart.image.series({
+  imageCollection: npp_collection,
+  region: fc_site,
+  reducer: ee.Reducer.mean(),
+  scale: 200,
+  xProperty: 'system:time_start',
+});
+timeseries_npp_site
+  .setChartType('ScatterChart')
+  .setOptions({
+    title: 'NPP over time in ' + sitename,
+    vAxis: {
+    title: 'NPP'
+    },
+    lineWidth: 1,
+    pointSize: 4,
+    series: {
+    // these are colors from the Set1 palette of colorBrewer
+      0: {color: 'e41a1c'}, // afgc
+      1: {color: '377eb8'}, // pfgc
+      2: {color: '4daf4a'}, // shr
+      3: {color: '984ea3'}, // tree
+      4: {color: 'ff7f00'}, // QC
+      5: {color: 'ffff33'}  // herbaceous
+    }
+  });
+print(timeseries_npp_site);
